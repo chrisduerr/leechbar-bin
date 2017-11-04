@@ -4,8 +4,8 @@ version = "0.1.0"
 authors = ["Christian Duerr <contact@christianduerr.com>"]
 
 [dependencies]
-leechbar = { path = "../leechbar" }
 env_logger = "0.4.3"
+leechbar = "0.4.0"
 image = "0.16.0"
 i3ipc = "0.8.2"
 time = "0.1.38"

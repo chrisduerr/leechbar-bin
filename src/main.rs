@@ -5,59 +5,65 @@ extern crate image;
 extern crate leechbar;
 extern crate time;
 
-// mod workspace_component;
-// mod volume_component;
+mod workspace_component;
+mod volume_component;
 mod time_component;
+mod image_cache;
 mod i3;
 
-// use workspace_component::Workspace;
-// use volume_component::Volume;
-use std::collections::HashMap;
+use workspace_component::Workspace;
+use volume_component::Volume;
+use image_cache::ImageCache;
 use time_component::Time;
 use leechbar::*;
-
-const OUTPUT: &str = "DisplayPort-0";
+use std::env;
+use i3::I3;
 
 const BG: &str = "./images/bg.png";
-const BG_SEC: &str = "./images/bg_sec.png";
+const FONT: &str = "Fira Sans 12";
+const NAME: &str = "LeechBar";
 
 fn main() {
     env_logger::init().unwrap();
+
+    // Get output and ws offset
+    let output = env::args().nth(1).expect("Please specify an output");
+    let ws_offset = env::args().nth(2).expect("Please spcify ws offset");
+    let ws_offset = i32::from_str_radix(&ws_offset, 10).unwrap();
 
     let bg_img = image::open(BG).unwrap();
     let mut bar = BarBuilder::new()
         .foreground_color(Color::new(158, 158, 158, 255))
         .background_image(bg_img.clone())
-        .font("Fira Sans 12")
-        .name("LeechBar")
         .text_yoffset(-1)
-        .output(OUTPUT)
+        .output(output)
         .height(32)
+        .font(FONT)
+        .name(NAME)
         .spawn()
         .unwrap();
 
-    // Create cache for globally used images
-    let mut cache = HashMap::new();
-    cache.insert("bg", Image::new(&bar, &bg_img).unwrap());
-    cache.insert(
-        "bg_sec",
-        Image::new(&bar, &image::open(BG_SEC).unwrap()).unwrap(),
-    );
+    let image_cache = ImageCache::new(bar.clone());
 
     // Workspaces
-    // for i in 0..5 {
-    //     let id = (i * 3 + 1).to_string();
-    //     let ws = Workspace::new(bar.clone(), bg_img.clone(), bg_sec.clone(), id);
-    //     bar.add(ws);
-    // }
+    let mut eye_three = I3::new();
+    for i in 0..5 {
+        let id = (i * 3 + ws_offset).to_string();
+
+        let (tx, rx) = ::std::sync::mpsc::channel();
+        eye_three.add(id.clone(), tx);
+
+        let ws = Workspace::new(i, image_cache.clone(), rx);
+        bar.add(ws);
+    }
 
     // Time
-    let time = Time::new(bar.clone(), cache.clone());
+    let time = Time::new(bar.clone(), image_cache.clone());
     bar.add(time);
 
     // Volume
-    // let vol = Volume::new(bar.clone(), bg_sec.clone());
-    // bar.add(vol);
+    let vol = Volume::new(bar.clone(), image_cache.clone());
+    bar.add(vol);
 
     bar.start_event_loop();
 }

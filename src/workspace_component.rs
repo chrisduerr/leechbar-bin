@@ -1,104 +1,110 @@
-use i3ipc::reply::Workspace as I3Workspace;
-use i3ipc::I3Connection;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
+use image_cache::ImageCache;
+use std::sync::{Arc, Mutex};
+use std::process::Command;
+use std::path::Path;
+use i3::I3Change;
 use leechbar::*;
+use std::thread;
+use chan;
 
 pub struct Workspace {
-    bar: Bar,
-    id: String,
-    redraw: bool,
-    bg_img: Image,
-    bg_sec_img: Image,
-    old_state: String,
+    id: i32,
+    image_cache: ImageCache,
+    visible: Arc<AtomicBool>,
+    title: Arc<Mutex<String>>,
+    receiver: Option<Receiver<I3Change>>,
 }
 
 impl Workspace {
-    pub fn new(bar: Bar, bg_img: Image, bg_sec_img: Image, id: String) -> Self {
+    pub fn new(id: i32, image_cache: ImageCache, rc: Receiver<I3Change>) -> Self {
         Self {
-            id,
-            bar,
-            bg_img,
-            bg_sec_img,
-            redraw: true,
-            old_state: String::new(),
+            id: id + 1,
+            image_cache,
+            receiver: Some(rc),
+            title: Arc::new(Mutex::new("empty".into())),
+            visible: Arc::new(AtomicBool::new(true)),
         }
     }
 }
 
 impl Component for Workspace {
-    fn background(&mut self) -> Background {
-        // Get the workspace
-        let ws_res = workspace_by_id(&self.id);
-        if ws_res.is_err() {
-            if self.old_state != "missing" {
-                self.old_state = "missing".into();
-            } else {
-                self.redraw = false;
+    fn redraw_timer(&mut self) -> chan::Receiver<()> {
+        let (tx, rx) = chan::sync(0);
+
+        let receiver = self.receiver.take().unwrap();
+        let visible = self.visible.clone();
+        let title = self.title.clone();
+        thread::spawn(move || loop {
+            if let Ok(change) = receiver.recv() {
+                if let Some(new_visible) = change.state {
+                    if visible.load(Ordering::Relaxed) != new_visible {
+                        visible.store(new_visible, Ordering::Relaxed);
+                        let _ = tx.send(());
+                    }
+                }
+
+                let mut title_lock = title.lock().unwrap();
+                if let Some(new_title) = change.title {
+                    if *title_lock != new_title {
+                        *title_lock = new_title;
+                        let _ = tx.send(());
+                    }
+                }
             }
-            return Background::new().image(&self.bg_img);
+        });
+
+        rx
+    }
+
+    fn event(&mut self, event: Event) -> bool {
+        if let Event::ClickEvent(e) = event {
+            if let MouseButton::Left = e.button {
+                // Change workspace and swallow stdout
+                let command = format!("$HOME/scripts/switch_focused_workspace {}", self.id);
+                let _ = Command::new("sh").args(&["-c", &command]).output();
+            }
         }
-        let ws = ws_res.unwrap();
 
-        // Construct a string with the current state of the ws
-        let state = ws.visible.to_string();
+        false
+    }
 
-        // Only keep going if redraw is required
-        if state != self.old_state {
-            self.old_state = state;
-            if ws.visible {
-                Background::new().image(&self.bg_sec_img)
+    fn background(&self) -> Background {
+        // Lock title to this thread
+        let title_lock = self.title.lock().unwrap();
+
+        let path_str;
+        let path = if !self.visible.load(Ordering::Relaxed) {
+            path_str = format!("./images/ws/{}.png", title_lock);
+            let path = Path::new(&path_str);
+            if path.exists() {
+                path
             } else {
-                Background::new().image(&self.bg_img)
+                Path::new("./images/ws/mixed.png")
             }
         } else {
-            self.redraw = false;
-            Background::new()
-        }
+            path_str = format!("./images/ws/{}_sec.png", title_lock);
+            let path = Path::new(&path_str);
+            if path.exists() {
+                path
+            } else {
+                Path::new("./images/ws/mixed_sec.png")
+            }
+        };
+
+        self.image_cache.get(path).unwrap().into()
     }
 
-    fn foreground(&mut self) -> Option<Foreground> {
-        let text = Text::new(&self.bar, &self.id, None, None).unwrap();
-        Some(Foreground::new(text))
+    fn foreground(&self) -> Foreground {
+        Foreground::new()
     }
 
-    fn timeout(&mut self) -> Option<Duration> {
-        Some(Duration::from_millis(100))
-    }
-
-    fn alignment(&mut self) -> Alignment {
+    fn alignment(&self) -> Alignment {
         Alignment::LEFT
     }
 
-    fn width(&mut self) -> Width {
+    fn width(&self) -> Width {
         Width::new().fixed(60)
     }
-
-    fn redraw(&mut self) -> bool {
-        if !self.redraw {
-            self.redraw = true;
-            false
-        } else {
-            true
-        }
-    }
-}
-
-// Get an i3 workspace with a matching id
-// TODO: Keep the connection up
-fn workspace_by_id(id: &str) -> Result<I3Workspace, String> {
-    // Connect to i3
-    let mut conn = I3Connection::connect().map_err(|e| format!("Unable to connect to i3: {}", e))?;
-
-    // Get all workspaces
-    let workspaces = conn.get_workspaces()
-        .map_err(|e| format!("Unable to get workspaces: {}", e))?;
-
-    // Return workspace with matching id
-    for workspace in workspaces.workspaces {
-        if workspace.name == id {
-            return Ok(workspace);
-        }
-    }
-
-    Err(format!("Unable to find workspace with ID {}", id))
 }

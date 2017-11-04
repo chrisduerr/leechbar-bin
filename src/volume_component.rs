@@ -1,24 +1,25 @@
 use std::process::Command as Cmd;
+use image_cache::ImageCache;
 use std::time::Duration;
+use std::thread;
 use leechbar::*;
+use chan;
 
 const COMMAND: &str = "pactl list sinks | grep '^[[:space:]]Volume:' | \
                        head -n 1 | tail -n 1 | sed -e 's,.* \\([0-9][0-9]*\\)%.*,\\1,'";
 
 pub struct Volume {
     bar: Bar,
-    redraw: bool,
-    bg_img: Image,
+    cache: ImageCache,
     last_content: String,
     last_text: Option<Text>,
 }
 
 impl Volume {
-    pub fn new(bar: Bar, bg_img: Image) -> Self {
+    pub fn new(bar: Bar, cache: ImageCache) -> Self {
         Self {
             bar,
-            bg_img,
-            redraw: true,
+            cache,
             last_text: None,
             last_content: String::new(),
         }
@@ -26,46 +27,52 @@ impl Volume {
 }
 
 impl Component for Volume {
-    fn background(&mut self) -> Background {
-        Background::new().image(&self.bg_img)
-    }
-
-    fn foreground(&mut self) -> Option<Foreground> {
+    fn update(&mut self) -> bool {
         let output = Cmd::new("sh").args(&["-c", COMMAND]).output().unwrap();
         let content = String::from_utf8_lossy(&output.stdout).trim().to_owned();
 
-        if content.is_empty() {
-            return None;
-        }
-
         if content != self.last_content {
-            self.last_content = content;
-            self.last_text = Some(Text::new(&self.bar, &self.last_content, None, None).unwrap());
-            Some(Foreground::new(self.last_text.as_ref().unwrap()))
+            self.last_text = if !content.is_empty() {
+                self.last_content = content;
+                Some(Text::new(&self.bar, &self.last_content, None, None).unwrap())
+            } else {
+                None
+            };
+
+            true
         } else {
-            self.redraw = false;
-            None
+            false
         }
     }
 
-    fn timeout(&mut self) -> Option<Duration> {
-        Some(Duration::from_millis(250))
+    fn background(&self) -> Background {
+        Background::new().image(self.cache.get("./images/bg_sec.png").unwrap())
     }
 
-    fn alignment(&mut self) -> Alignment {
+    fn foreground(&self) -> Foreground {
+        if let Some(ref last_text) = self.last_text {
+            last_text.clone().into()
+        } else {
+            Foreground::new()
+        }
+    }
+
+    fn redraw_timer(&mut self) -> chan::Receiver<()> {
+        let (tx, rx) = chan::sync(0);
+
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(1));
+            let _ = tx.send(());
+        });
+
+        rx
+    }
+
+    fn alignment(&self) -> Alignment {
         Alignment::RIGHT
     }
 
-    fn width(&mut self) -> Width {
+    fn width(&self) -> Width {
         Width::new().fixed(75)
-    }
-
-    fn redraw(&mut self) -> bool {
-        if !self.redraw {
-            self.redraw = true;
-            false
-        } else {
-            true
-        }
     }
 }
