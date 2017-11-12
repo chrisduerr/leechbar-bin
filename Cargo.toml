@@ -4,9 +4,13 @@ version = "0.1.0"
 authors = ["Christian Duerr <contact@christianduerr.com>"]
 
 [dependencies]
+libpulse-sys = "0.0.0"
+lazy_static = "0.2.9"
 env_logger = "0.4.3"
 leechbar = "0.4.0"
 image = "0.16.0"
+libc = "0.2.33"
 i3ipc = "0.8.2"
 time = "0.1.38"
 chan = "0.1.19"
+log = "0.3.8"

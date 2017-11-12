@@ -4,6 +4,7 @@ use i3ipc::event::Event::{WindowEvent, WorkspaceEvent};
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use i3ipc::reply::Node;
 use std::thread;
 use i3ipc;
@@ -63,41 +64,48 @@ impl I3 {
     fn listen_workspace(&self) {
         let senders = Arc::clone(&self.senders);
         thread::spawn(move || {
-            // Start normal connection for ws queries
-            let mut conn = i3ipc::I3Connection::connect().unwrap();
+            loop {
+                info!("Starting i3 workspace connection");
+                // Start normal connection for ws queries
+                let mut conn = i3ipc::I3Connection::connect().unwrap();
 
-            // Start event connection for ws events
-            let mut event_conn = i3ipc::I3EventListener::connect().unwrap();
-            let _ = event_conn.subscribe(&[i3ipc::Subscription::Workspace]);
+                // Start event connection for ws events
+                let mut event_conn = i3ipc::I3EventListener::connect().unwrap();
+                let _ = event_conn.subscribe(&[i3ipc::Subscription::Workspace]);
 
-            for event in event_conn.listen() {
-                let ws_event = match event {
-                    Ok(e) => match e {
-                        WorkspaceEvent(ws_event) => ws_event,
-                        _ => continue,
-                    },
-                    _ => continue,
-                };
+                for event in event_conn.listen() {
+                    let ws_event = match event {
+                        Ok(e) => match e {
+                            WorkspaceEvent(ws_event) => ws_event,
+                            _ => continue,
+                        },
+                        Err(e) => {
+                            error!("Workspace i3 connection closed: {}", e);
+                            thread::sleep(Duration::from_secs(1));
+                            break;
+                        }
+                    };
 
-                if let Focus = ws_event.change {
-                    let workspaces = conn.get_workspaces().unwrap();
-                    let mut lock = senders.lock().unwrap();
-                    for workspace in workspaces.workspaces {
-                        if let Some(listener) = lock.get_mut(&workspace.name) {
-                            if workspace.visible != listener.old_state {
-                                listener.old_state = workspace.visible;
-                                let _ = listener
-                                    .sender
-                                    .send(I3Change::new(Some(workspace.visible), None));
+                    if let Focus = ws_event.change {
+                        let workspaces = conn.get_workspaces().unwrap();
+                        let mut lock = senders.lock().unwrap();
+                        for workspace in workspaces.workspaces {
+                            if let Some(listener) = lock.get_mut(&workspace.name) {
+                                if workspace.visible != listener.old_state {
+                                    listener.old_state = workspace.visible;
+                                    let _ = listener
+                                        .sender
+                                        .send(I3Change::new(Some(workspace.visible), None));
+                                }
                             }
                         }
-                    }
-                } else if let Empty = ws_event.change {
-                    let mut lock = senders.lock().unwrap();
-                    let ws_name = ws_event.current.unwrap().name.unwrap();
-                    if let Some(listener) = lock.get_mut(&ws_name) {
-                        listener.old_state = false;
-                        let _ = listener.sender.send(I3Change::new(Some(false), None));
+                    } else if let Empty = ws_event.change {
+                        let mut lock = senders.lock().unwrap();
+                        let ws_name = ws_event.current.unwrap().name.unwrap();
+                        if let Some(listener) = lock.get_mut(&ws_name) {
+                            listener.old_state = false;
+                            let _ = listener.sender.send(I3Change::new(Some(false), None));
+                        }
                     }
                 }
             }
@@ -108,72 +116,79 @@ impl I3 {
         let senders = Arc::clone(&self.senders);
         let tree = Arc::clone(&self.tree);
         thread::spawn(move || {
-            // Start normal connection for ws queries
-            let mut conn = i3ipc::I3Connection::connect().unwrap();
+            loop {
+                info!("Starting i3 window connection");
+                // Start normal connection for ws queries
+                let mut conn = i3ipc::I3Connection::connect().unwrap();
 
-            // Start event connection for ws events
-            let mut event_conn = i3ipc::I3EventListener::connect().unwrap();
-            let _ = event_conn.subscribe(&[i3ipc::Subscription::Window]);
+                // Start event connection for ws events
+                let mut event_conn = i3ipc::I3EventListener::connect().unwrap();
+                let _ = event_conn.subscribe(&[i3ipc::Subscription::Window]);
 
-            for event in event_conn.listen() {
-                let window_event = match event {
-                    Ok(e) => match e {
-                        WindowEvent(window_event) => window_event,
-                        _ => continue,
-                    },
-                    _ => continue,
-                };
-
-                let mut tree = tree.lock().unwrap();
-
-                let mut workspace_states = Vec::new();
-                let id = window_event.container.id;
-                match window_event.change {
-                    New => {
-                        *tree = conn.get_tree().unwrap();
-                        let ws = workspace_state(&(*tree), id);
-                        if let Some(ws) = ws {
-                            workspace_states.push(ws);
+                for event in event_conn.listen() {
+                    let window_event = match event {
+                        Ok(e) => match e {
+                            WindowEvent(window_event) => window_event,
+                            _ => continue,
+                        },
+                        Err(e) => {
+                            error!("Window i3 connection closed: {}", e);
+                            thread::sleep(Duration::from_secs(1));
+                            break;
                         }
-                    }
-                    Move => {
-                        let ws = workspace_state(&(*tree), id);
-                        if let Some(mut ws) = ws {
-                            *tree = conn.get_tree().unwrap();
-                            ws.names = child_names_by_ws(&(*tree), &ws.workspace);
-                            workspace_states.push(ws);
-                        }
-
-                        let ws = workspace_state(&(*tree), id);
-                        if let Some(ws) = ws {
-                            workspace_states.push(ws);
-                        }
-                    }
-                    Close => {
-                        let ws = workspace_state(&(*tree), id);
-                        if let Some(mut ws) = ws {
-                            *tree = conn.get_tree().unwrap();
-                            ws.names = child_names_by_ws(&(*tree), &ws.workspace);
-                            workspace_states.push(ws);
-                        }
-                    }
-                    _ => continue,
-                };
-
-                for state in workspace_states {
-                    let name = if state.names.len() == 1 {
-                        state.names[0].clone()
-                    } else if state.names.is_empty() {
-                        "empty".into()
-                    } else {
-                        "mixed".into()
                     };
 
-                    let mut lock = senders.lock().unwrap();
-                    if let Some(listener) = lock.get_mut(&state.workspace) {
-                        if listener.old_title != name {
-                            listener.old_title = name.clone();
-                            let _ = listener.sender.send(I3Change::new(None, Some(name)));
+                    let mut tree = tree.lock().unwrap();
+
+                    let mut workspace_states = Vec::new();
+                    let id = window_event.container.id;
+                    match window_event.change {
+                        New => {
+                            *tree = conn.get_tree().unwrap();
+                            let ws = workspace_state(&(*tree), id);
+                            if let Some(ws) = ws {
+                                workspace_states.push(ws);
+                            }
+                        }
+                        Move => {
+                            let ws = workspace_state(&(*tree), id);
+                            if let Some(mut ws) = ws {
+                                *tree = conn.get_tree().unwrap();
+                                ws.names = child_names_by_ws(&(*tree), &ws.workspace);
+                                workspace_states.push(ws);
+                            }
+
+                            let ws = workspace_state(&(*tree), id);
+                            if let Some(ws) = ws {
+                                workspace_states.push(ws);
+                            }
+                        }
+                        Close => {
+                            let ws = workspace_state(&(*tree), id);
+                            if let Some(mut ws) = ws {
+                                *tree = conn.get_tree().unwrap();
+                                ws.names = child_names_by_ws(&(*tree), &ws.workspace);
+                                workspace_states.push(ws);
+                            }
+                        }
+                        _ => continue,
+                    };
+
+                    for state in workspace_states {
+                        let name = if state.names.len() == 1 {
+                            state.names[0].clone()
+                        } else if state.names.is_empty() {
+                            "empty".into()
+                        } else {
+                            "mixed".into()
+                        };
+
+                        let mut lock = senders.lock().unwrap();
+                        if let Some(listener) = lock.get_mut(&state.workspace) {
+                            if listener.old_title != name {
+                                listener.old_title = name.clone();
+                                let _ = listener.sender.send(I3Change::new(None, Some(name)));
+                            }
                         }
                     }
                 }

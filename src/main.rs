@@ -2,8 +2,15 @@ extern crate chan;
 extern crate env_logger;
 extern crate i3ipc;
 extern crate image;
+#[macro_use]
+extern crate lazy_static;
 extern crate leechbar;
+extern crate libc;
+extern crate libpulse_sys;
+#[macro_use]
+extern crate log;
 extern crate time;
+
 
 mod workspace_component;
 mod volume_component;
