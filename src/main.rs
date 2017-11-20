@@ -13,13 +13,13 @@ extern crate time;
 
 
 mod workspace_component;
-mod volume_component;
 mod time_component;
+mod volume_slider;
 mod image_cache;
 mod i3;
 
 use workspace_component::Workspace;
-use volume_component::Volume;
+use volume_slider::VolumeSlider;
 use image_cache::ImageCache;
 use time_component::Time;
 use leechbar::*;
@@ -69,7 +69,7 @@ fn main() {
     bar.add(time);
 
     // Volume
-    let vol = Volume::new(bar.clone(), image_cache.clone());
+    let vol = VolumeSlider::new(bar.clone(), image_cache.clone(), 20, 10, 150, 10);
     bar.add(vol);
 
     bar.start_event_loop();

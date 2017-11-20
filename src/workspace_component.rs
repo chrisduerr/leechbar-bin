@@ -34,22 +34,24 @@ impl Component for Workspace {
         let (tx, rx) = chan::sync(0);
 
         let receiver = self.receiver.take().unwrap();
-        let visible = self.visible.clone();
-        let title = self.title.clone();
-        thread::spawn(move || loop {
-            if let Ok(change) = receiver.recv() {
-                if let Some(new_visible) = change.state {
-                    if visible.load(Ordering::Relaxed) != new_visible {
-                        visible.store(new_visible, Ordering::Relaxed);
-                        let _ = tx.send(());
+        let visible = Arc::clone(&self.visible);
+        let title = Arc::clone(&self.title);
+        thread::spawn(move || {
+            loop {
+                if let Ok(change) = receiver.recv() {
+                    if let Some(new_visible) = change.state {
+                        if visible.load(Ordering::Relaxed) != new_visible {
+                            visible.store(new_visible, Ordering::Relaxed);
+                            tx.send(());
+                        }
                     }
-                }
 
-                let mut title_lock = title.lock().unwrap();
-                if let Some(new_title) = change.title {
-                    if *title_lock != new_title {
-                        *title_lock = new_title;
-                        let _ = tx.send(());
+                    let mut title_lock = title.lock().unwrap();
+                    if let Some(new_title) = change.title {
+                        if *title_lock != new_title {
+                            *title_lock = new_title;
+                            tx.send(());
+                        }
                     }
                 }
             }

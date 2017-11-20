@@ -57,9 +57,11 @@ impl Component for Time {
     fn redraw_timer(&mut self) -> chan::Receiver<()> {
         let (tx, rx) = chan::sync(0);
 
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(15));
-            let _ = tx.send(());
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(15));
+                tx.send(());
+            }
         });
 
         rx
